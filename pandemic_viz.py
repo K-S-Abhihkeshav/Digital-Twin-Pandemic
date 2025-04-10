@@ -65,12 +65,14 @@ VACCINE_PENALTY = 1.0       # subtract from infected logit if vaccinated
 INFECTED_NEIGHBOR_BONUS = 0.5  # add per infected neighbor
 
 # Simple death thresholds based on predicted health parameters
-def check_death(predicted_params):
-    bp, temp, rr, hr = predicted_params
+def check_death(agent):
     # Example thresholds: if blood pressure or heart rate fall below safe limits, mark as dead.
-    if bp < 80 or hr < 40:
-        return True
-    return False
+    if agent.is_dead == False and (agent.critical_steps > 5 or agent.health_history[-1][0] <= 60 or agent.health_history[-1][0] >= 160 or agent.health_history[-1][1] >= 105 or agent.health_history[-1][1] <= 93 or agent.health_history[-1][2] >= 30 or agent.health_history[-1][2] <= 7 or agent.health_history[-1][3] <= 25 or agent.health_history[-1][3] >= 120):
+        agent.is_dead = True
+        agent.state = "dead"
+        agent.critical_steps = 0
+        print(agent.health_history[-1])
+        agent.set_dead_vitals()
 
 class AgentDetailElement(VisualizationElement):
     local_includes = ["AgentDetailElement.js"]  # Must match actual file name
@@ -88,20 +90,44 @@ class AgentDetailElement(VisualizationElement):
 class Person(Agent):
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
-        self.state = "critical"
         self.is_vaccinated = False
+        self.critical_steps = 0
+        self.critical_delay = 0
         self.is_dead = False
-        self.infection_timer = 0
-        self.health_history = [np.array([120.0, 105.6, 16.0, 70.0]),np.array([120.0, 105.6, 16.0, 70.0]),np.array([120.0, 105.6, 16.0, 70.0]),np.array([120.0, 105.6, 16.0, 70.0])]
+        self.infected_timer = 0
+
+        if unique_id != 0:
+            self.state = random.choice(["healthy", "infected", "critical", "chronic"])
+            self.health_history = [
+                np.array([
+                    random.uniform(80,140),   # Blood Pressure
+                    random.uniform(95.0, 103), # Temperature
+                    random.uniform(8,23),     # Respiratory Rate
+                    random.uniform(50,110)      # Heart Rate
+                ]) for _ in range(5)
+            ]
+        
+        else:
+            self.state = "critical"
+            self.health_history = [np.array([145, 104, 24, 115.0]) for _ in range(5)]
 
     def move(self):
         if self.is_dead:
             return
         x, y = self.pos
-        possible_moves = [(x + dx, y + dy) for dx in [-1, 0, 1] for dy in [-1, 0, 1]
-                          if (dx != 0 or dy != 0) and 0 <= x + dx < self.model.grid.width and 0 <= y + dy < self.model.grid.height]
-        if possible_moves:
-            new_position = self.random.choice(possible_moves)
+        possible_moves = [
+            (x + dx, y + dy) for dx in [-1, 0, 1] for dy in [-1, 0, 1]
+            if (dx != 0 or dy != 0)
+            and 0 <= x + dx < self.model.grid.width
+            and 0 <= y + dy < self.model.grid.height
+        ]
+        # Filter out positions that contain a Wall
+        filtered_moves = [
+            pos for pos in possible_moves
+            if not any(isinstance(obj, Wall) for obj in self.model.grid.get_cell_list_contents(pos))
+        ]
+        if filtered_moves:
+            new_position = self.random.choice(filtered_moves)
             self.model.grid.move_agent(self, new_position)
 
     def count_infected_neighbors(self):
@@ -118,12 +144,13 @@ class Person(Agent):
         for agent in agents:
             seq_length = min(len(agent.health_history), 20)
             seq = agent.health_history[-seq_length:]
-            if len(seq) < 5:
-                seq = [seq[0]] * (5 - len(seq)) + seq
+            # if len(seq) < 5:
+            #     seq = [seq[0]] * (5 - len(seq)) + seq
             seq_flat_batch.append(seq)
             infected_neighbors_batch.append(agent.count_infected_neighbors())
             vaccinated_batch.append(agent.is_vaccinated)
-
+        # print("seq_flat_batch")
+        # print(seq_flat_batch)
         seq_flat_batch = np.array(seq_flat_batch)
         infected_neighbors_batch = np.array(infected_neighbors_batch)
         vaccinated_batch = np.array(vaccinated_batch)
@@ -163,6 +190,13 @@ class Person(Agent):
         encoder_vector_batch = []
         for i, agent in enumerate(agents):
             agent.state = chosen_states[i]
+            # if(agent.infected_timer > 4):
+            #     agent.state = "critical"
+            #     agent.infected_timer -= 1
+            # elif(agent.state == "infected"):
+            #     agent.infected_timer += 1 
+            # else:
+            #     agent.infected_timer = 0
             encoder_vector_batch.append(encode_state(agent.state))
 
         encoder_vector_batch = np.array(encoder_vector_batch)
@@ -179,14 +213,25 @@ class Person(Agent):
             agent.health_history.append(predicted_params_batch[i])
             
             # Check for death based on updated health parameters
-            if check_death(predicted_params_batch[i]):
-                agent.is_dead = True
+            check_death(agent)
 
+    def set_dead_vitals(self):
+        self.health_history.append(np.array([0, 82, 0, 0]))
 
     def step(self):
         # check values of human to see if they are dead
-        if self.health_history[-1][0] <= 60 or self.health_history[-1][0] >= 180 or self.health_history[-1][1] >= 106 or self.health_history[-1][1] <= 93 or self.health_history[-1][2] >= 40 or self.health_history[-1][2] <= 7 or self.health_history[-1][3] <= 40 or self.health_history[-1][3] >= 160:
-            self.is_dead = True
+        if self.state == "critical":
+            self.critical_steps += 1
+            # self.health_history[-1][1] += 0.4  # Increase temperature
+            # self.critical_delay = 0
+        # elif self.critical_delay < 3:
+        #     self.critical_delay += 1
+        else:
+            self.critical_steps = 0  # reset if not critical
+            # self.critical_delay = 0
+
+        # Check if the person has been critical for more than 3 steps
+        # 145, 104, 24, 115.0
         if self.is_dead:
             return
         cellmates = self.model.grid.get_cell_list_contents(self.pos)
@@ -200,10 +245,47 @@ class Hospital(Agent):
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
 
+class Wall(Agent):
+    """A hospital where people can get vaccinated."""
+    def __init__(self, unique_id, model):
+        super().__init__(unique_id, model)
+
+def create_enclosure(x1, y1, x2, y2, gate_positions=None):
+    walls = []
+    gate_positions = gate_positions or []
+
+    # Left and right walls
+    for y in range(y1, y2 + 1):
+        if (x1, y) not in gate_positions:
+            walls.append((x1, y))
+        if (x2, y) not in gate_positions:
+            walls.append((x2, y))
+
+    # Top and bottom walls
+    for x in range(x1 + 1, x2):
+        if (x, y1) not in gate_positions:
+            walls.append((x, y1))
+        if (x, y2) not in gate_positions:
+            walls.append((x, y2))
+
+    return walls
+
+
 class PandemicModel(Model):
     def __init__(self, width, height, N, num_hospitals=3):
         self.grid = MultiGrid(width, height, torus=False)
         self.schedule = RandomActivation(self)
+        gate_positions = [
+            (10, 13),  
+            (7, 11),   
+            (13, 10),  
+        ]
+
+        wall_positions = create_enclosure(7, 9, 13, 13, gate_positions)
+
+        for idx, pos in enumerate(wall_positions):
+            wall = Wall(f"W{idx}", self)
+            self.grid.place_agent(wall, pos)
 
         for i in range(num_hospitals):
             x, y = self.grid.find_empty()
@@ -213,8 +295,8 @@ class PandemicModel(Model):
 
         for i in range(N):
             person = Person(i, self)
-            if random.random() < 0.05:
-                person.state = "infected"
+            # if random.random() < 0.05:
+            #     person.state = "infected"
             x, y = self.grid.find_empty()
             self.grid.place_agent(person, (x, y))
             self.schedule.add(person)
@@ -229,8 +311,8 @@ class PandemicModel(Model):
         })
 
     def step(self):
-        active_agents = [a for a in self.schedule.agents if isinstance(a, Person) and not a.is_dead]
         self.schedule.step()
+        active_agents = [a for a in self.schedule.agents if isinstance(a, Person) and not a.is_dead]
         if active_agents:
             Person.batch_update_health_state(active_agents)
         self.datacollector.collect(self)
@@ -257,10 +339,13 @@ def agent_portrayal(agent):
     if isinstance(agent, Hospital):
         return {"Shape": "rect", "Color": "white", "Filled": True, "w": 0.8, "h": 0.8,
                 "Layer": 0, "text": "H", "text_color": "black"}
+    elif isinstance(agent, Wall):
+        return {"Shape": "rect", "Color": "gray", "Filled": True, "w": 1.0, "h": 1.0,
+            "Layer": 0, "text": "X", "text_color": "white"}
     elif isinstance(agent, Person):
         # Dead agents get a distinct color regardless of health state.
         if agent.is_dead:
-            color = "black"
+            color = "gray"
         elif agent.state == "infected":
             color = "red"
         # Vaccinated agents get a special color.
@@ -287,7 +372,7 @@ chart = ChartModule([
     {"Label": "Critical", "Color": "orange"},
     {"Label": "Chronic", "Color": "purple"},
     {"Label": "Vaccinated", "Color": "pink"},
-    {"Label": "Dead", "Color": "black"},
+    {"Label": "Dead", "Color": "gray"},
 ])
 
 agent_detail = AgentDetailElement()
@@ -297,5 +382,5 @@ server = ModularServer(
     "Pandemic Digital Twin with ML, Vaccination, & Death",
     {"width": 20, "height": 20, "N": 30, "num_hospitals": 3}
 )
-server.port = 8524
+server.port = 8526
 server.launch()

@@ -136,8 +136,8 @@ AgentDetailElement.prototype.displayAgentDetails = function(agentID) {
 
         // Define normal ranges
         let tempColor = getColor(healthValues["Temperature (°F)"], [97, 100.4], [95, 103]);
-        let hrColor = getColor(healthValues["Heart Rate"], [60, 100], [50, 120]);
-        let rrColor = getColor(healthValues["Respiratory Rate"], [12, 20], [8, 25]);
+        let hrColor = getColor(healthValues["Heart Rate"], [65, 100], [50, 110]);
+        let rrColor = getColor(healthValues["Respiratory Rate"], [12, 18], [8, 23]);
         let sbpColor = getColor(healthValues["Systolic BP"], [90, 120], [80, 140]);
 
         // Create a container for images
